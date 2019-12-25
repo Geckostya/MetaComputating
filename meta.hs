@@ -6,9 +6,9 @@ import Debug.Trace
 infixl 4 :@:
 infixl 3 :-
 
-data Pattern = P String [String] deriving (Eq, Show)
+data Pattern = P String [String] deriving (Eq)
 
-data PatternMatch = Pattern :- Expr deriving (Eq, Show)
+data PatternMatch = Pattern :- Expr deriving (Eq)
 
 data Expr = V String
           | C String [Expr]
@@ -17,7 +17,7 @@ data Expr = V String
           | Expr :@: Expr
           | Case Expr [PatternMatch]
           | Let String Expr Expr
-          deriving (Eq, Show)
+          deriving (Eq)
 
 type Context = [(String, Expr)]
 
@@ -110,20 +110,6 @@ freeVsP (P _ xs :- e) = (freeVs e) \\ xs
 
 ---------------------------------------------------------------------------
 
--- eval :: Context -> Expr -> Expr
--- eval _ v@(V _)            = v
--- eval fs (F name)          = getF fs name
--- eval fs ((L x e1) :@: e2) = eval fs $ subst x e2 e1
--- eval fs a@(e1 :@: e2)
---     | isVal e1  = a
---     | otherwise = eval fs ((eval fs e1) :@: e2)
--- eval fs (Let x e1 e2)     = eval fs $ subst x e1 (eval fs e2)
--- eval fs (Case e ps)
---     | c@(C name es)        <- eval fs e,
---       Just (P _ xs :- e'') <- find (isMatch c) ps = eval fs $ substAll xs es e''
--- eval _ e                  = if (isVal e) then e else error $ (show e) ++ " not val"
-
-
 eval :: Context -> Expr -> Expr
 eval c e = {-trace (show e ++ "\n") $-} eval' c e
 
@@ -145,36 +131,6 @@ evalOnce fs c@(Case e ps)
 evalOnceList :: Context -> [Expr] -> [Expr]
 evalOnceList fs []     = []
 evalOnceList fs (e:es) = if isVal e then e : (evalOnceList fs es) else (evalOnce fs e) : es  
-
-isNF :: Expr -> Bool
-isNF (L _ e) = isNF e
-isNF e       = isNANF e
-
-isNANF :: Expr -> Bool
-isNANF (V _)       = True
-isNANF (C _ es)    = all isNANF es
-isNANF (e1 :@: e2) = isNANF e1 && isNF e2
-isNANF _           = False
-
-
-evalNF :: Context -> Expr -> Expr
-evalNF fs v = {-trace (show v) $-} evalNF2 fs v
-
-evalNF2 :: Context -> Expr -> Expr
-evalNF2 _ v@(V _)            = v
-evalNF2 fs (F name)          = getF fs name
--- evalNF2 fs (L x e)           = L x $ evalNF fs e
-evalNF2 fs ((L x e1) :@: e2) = evalNF fs $ subst x e2 e1
-evalNF2 fs a@(e1 :@: e2)
-    | isNANF e1  = e1 :@: evalNF fs e2
-    | otherwise = evalNF fs ((evalNF fs e1) :@: e2)
-evalNF2 fs (C n es)          = C n $ (evalNF fs) <$> es
-evalNF2 fs (Let x e1 e2)     = evalNF fs $ subst x e1 (evalNF fs e2)
-evalNF2 fs (Case e ps)
-    | c@(C name es)        <- evalNF fs e,
-      Just (P _ xs :- e'') <- find (isMatch c) ps = evalNF fs $ substAll xs es e''
-evalNF2 fs e                 = e--if (isNF e) then e else evalNF fs e
-
 
 
 ---------------------------------------------------------------------------
@@ -240,22 +196,6 @@ patsEqual p1 p2 = all (\(P name1 _, P name2 _) -> name1 == name2) $ zip (getPats
 
 ---------------------------------------------------------------------------
 
--- data Subst = String :-> Expr
-
--- compose11 :: Subst -> Subst -> Subst
--- compose11 (s1 :-> e1) (s2 :-> e2)
---     | s1 == s2  = error $ "s1 == s2 == " ++ s1 ++ " in s1 :-> " ++ (show e1) ++ "; s2 :-> " ++ (show e2)
---     | otherwise = s2 :-> subst s1 e1 e2
-
--- compose1n :: Subst -> [Subst] -> [Subst]
--- compose1n sb1 sbs = (compose11 sb1) <$> sbs
-
--- compose :: [Subst] -> [Subst] -> [Subst]
--- compose sbs1 sbs2 = foldl (flip compose1n) sbs2 sbs1
-
--- substUnion :: [Subst] -> [Subst] -> [Subst]
--- substUnion sbs1 sbs2 = sbs1 ++ (compose sbs1 sbs2)
-
 type Subst = [(String, Expr)]
 type Gen = (Expr, Subst, Subst)
 makeGen a b c = (a, b, c)
@@ -268,14 +208,6 @@ deleteP n xs = filter ((n /=) . fst) xs
 infixl 5 |-|
 
 (|-|) :: Expr -> Subst -> Expr
--- (V x)         |-| sub = fromMaybe (V x) $ lookup x sub
--- f@(F _)       |-| sub = f
--- (e1 :@: e2)   |-| sub = (e1 |-| sub) :@: (e2 |-| sub)
--- (C n es)      |-| sub = C n (map (|-| sub) es)
--- (L x e)       |-| sub = L x (e |-| (deleteP x sub))
--- (Case e pm)   |-| sub = Case (e |-| sub) (map f pm) where
---                 f (p@(P _ xs) :- ei) = p :- ei |-| filter (flip notElem xs . fst) sub
--- (Let y e1 e2) |-| sub = Let y (e1 |-| sub) (e2 |-| (filter (\(x, _) -> x /= y) sub))
 e1 |-| sub = foldl (\e0 (s, e) -> subst s e e0) e1 sub
 
 
@@ -459,21 +391,21 @@ isNum (C "Z" xs)   = True
 isNum (C "Suc" xs) = isNum $ head xs
 isNum _            = False
 
--- instance Show Expr where
---     show (V name)          = name
---     show c@(C name args) | isNum c = show $ e2i c
---     show (C name args)     = name ++ "[" ++ (intercalate ", " (show <$> args)) ++ "]"
---     show (L arg expr)      = "λ" ++ arg ++ "." ++ (show expr)
---     show (l :@: r)         = "(" ++ (show l) ++ " " ++ (show r) ++ ")"  
---     show (F name)          = name
---     show (Let var e1 e2)   = "let " ++ var ++ " = " ++ (show e1) ++ " in " ++ (show e2)
---     show (Case expr cases) = "case " ++ (show expr) ++ " of\n\t{\n" ++ (concatMap (\pm -> "\t\t" ++ (show pm) ++ "\n") cases) ++ "\t}"
+instance Show Expr where
+    show (V name)          = name
+    show c@(C name args) | isNum c = show $ e2i c
+    show (C name args)     = name ++ "[" ++ (intercalate ", " (show <$> args)) ++ "]"
+    show (L arg expr)      = "λ" ++ arg ++ "." ++ (show expr)
+    show (l :@: r)         = "(" ++ (show l) ++ " " ++ (show r) ++ ")"  
+    show (F name)          = name
+    show (Let var e1 e2)   = "let " ++ var ++ " = " ++ (show e1) ++ " in " ++ (show e2)
+    show (Case expr cases) = "case " ++ (show expr) ++ " of\n\t{\n" ++ (concatMap (\pm -> "\t\t" ++ (show pm) ++ "\n") cases) ++ "\t}"
 
--- instance Show Pattern where
---     show (P name args) = name ++ "[" ++ (intercalate " " args) ++ "]"
+instance Show Pattern where
+    show (P name args) = name ++ "[" ++ (intercalate " " args) ++ "]"
 
--- instance Show PatternMatch where
---     show (p :- e) = show p ++ " :- " ++ show e
+instance Show PatternMatch where
+    show (p :- e) = show p ++ " :- " ++ show e
 
 getNode :: Graph -> String
 getNode (Node e _) = "\"" ++ (show e) ++ "\""
@@ -610,41 +542,14 @@ list2e :: [Int] -> Expr
 list2e []     = C "Nil" []
 list2e (x:xs) = C "Cons" [i2e x, list2e xs]
 
-example = F "sum" :@: (F "squares" :@: (F "upto" :@: i2e 1 :@: i2e 3)) :@: i2e 0
+example n = F "sum" :@: (F "squares" :@: (F "upto" :@: i2e 1 :@: i2e n)) :@: i2e 0
 
 example2 = F "sum" :@: (F "squares" :@: (F "upto" :@: i2e 1 :@: V "n")) :@: i2e 0
 
-checkEval = e2i $ eval functions example
-checkEvalNF = e2i $ evalNF functions example
+checkEval n = eval functions $ example n
+
 check = supercompile functions example2
 
+super n = let (e, c) = generateCode check in eval (functions ++ c) (e :@: i2e n)
+
 toFile = writeFile "file.txt" $ renderDot check
-
-super = let (e, c) = generateCode check in eval (functions ++ c) (e :@: i2e 3)
-super2 = e2i $ eval (functions ++ getCtx) (genExpr :@: i2e 3)
-
-
-testCase = (L "t" $ Case (V "t") [
-                        P "Tru" [] :- Let "x" (C "Z" [V "t"]) (V "x")
-                    ]) :@: C "Tru" []
-
-
-genExpr = L "n" (Let "$0" (C "Suc" [C "Z" []])
-            (Let "$1" (C "Z" []) 
-                (((((F "#1" :@: V "$0") :@: V "$1") :@: V "$0") :@: V "n") :@: V "$1")))
-
-getCtx = [
-    ("func1", 
-    L "$0" (L "$1" ((F "func2" :@: V "$0") :@: V "n"))),
-
-    ("func2",
-    L "$0" (L "n" (Case (V "$0") [
-            P "Z" [] :- Let "$2" ((F "+" :@: C "Suc" [C "Z" []]) :@: V "$0")
-                            (Let "$3" ((F "+" :@: (F "^2" :@: V "$0")) :@: V "$1")
-                                ((F "#1" :@: V "$2") :@: V "$3")),
-            P "Suc" ["x"] :- Case (V "n") [
-                    P "Z" [] :- V "$1",P "Suc" ["y"] :- (F "#2" :@: V "x") :@: V "y"
-                ]
-        ])))
-    ]
-
