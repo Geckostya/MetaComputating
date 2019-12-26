@@ -21,6 +21,23 @@ data Expr = V String
 
 type Context = [(String, Expr)]
 
+
+instance Show Expr where
+    show (V name)          = name
+    show c@(C name args) | isNum c = show $ e2i c
+    show (C name args)     = name ++ "[" ++ (intercalate ", " (show <$> args)) ++ "]"
+    show (L arg expr)      = "λ" ++ arg ++ "." ++ (show expr)
+    show (l :@: r)         = "(" ++ (show l) ++ " " ++ (show r) ++ ")"  
+    show (F name)          = name
+    show (Let var e1 e2)   = "let " ++ var ++ " = " ++ (show e1) ++ " in " ++ (show e2)
+    show (Case expr cases) = "case " ++ (show expr) ++ " of\n\t{\n" ++ (concatMap (\pm -> "\t\t" ++ (show pm) ++ "\n") cases) ++ "\t}"
+
+instance Show Pattern where
+    show (P name args) = name ++ "[" ++ (intercalate " " args) ++ "]"
+
+instance Show PatternMatch where
+    show (p :- e) = show p ++ " :- " ++ show e
+
 getF :: Context -> String -> Expr
 getF ctx name = fromMaybe (error $ "can't find " ++ name) $ lookup name ctx
 
@@ -181,12 +198,12 @@ getPats :: [PatternMatch] -> [Pattern]
 getPats ps = map (\(p :- _) -> p) ps
 
 renaming' :: (Expr, Expr) -> [Maybe (String, String)]
-renaming' ((V x), (V y)) = if x == y then [] else [Just (x, y)]
+renaming' ((V x), (V y))                = if x == y then [] else [Just (x, y)]
 renaming' ((C n1 args1), (C n2 args2)) | n1 == n2 = concat $ map renaming' $ zip args1 args2
-renaming' ((F n1), (F n2)) = []
+renaming' ((F n1), (F n2))              = if n1 == n2 then [] else [Nothing]
 renaming' (Let v e1 e2, Let v' e1' e2') = error "No renaming for Let supported"  -- renaming' (e1, e1') ++ renaming' (e2, e2' |-| [(v, V v')])
-renaming' (a1 :@: b1, a2 :@: b2) = renaming' (a1, a2) ++ renaming' (b1, b2) 
-renaming' (L x e1, L y e2) = renaming' (e1, e2 |-| [(y, V x)])
+renaming' (a1 :@: b1, a2 :@: b2)        = renaming' (a1, a2) ++ renaming' (b1, b2) 
+renaming' (L x e1, L y e2)              = renaming' (e1, e2 |-| [(y, V x)])
 renaming' (Case x pats1, Case y pats2) | patsEqual pats1 pats2 = 
     renaming' (x, y) ++ (concat $ map renaming' $ zip (getExps pats1) (getExps pats2))
 renaming' _  = [Nothing]
@@ -354,7 +371,7 @@ argRenaming e r = let vs = filter (notInRenaming r) (freeVs e) in r ++ ((\a -> (
 
 supercompile' :: Supercomiler
 supercompile' ns fs mem e
-    | Just (e', r) <- existRenaming mem e = Right  $ Fold e' $ argRenaming e' r
+    | Just (e', r) <- existRenaming mem e = {-Right $ Node e [Label "-" $ Fold e' $ argRenaming e' r]-}Right  $ Fold e' $ argRenaming e' r
     | Just e'      <- existCoupling mem e, --- e' <:c e
       ((eg, th1, th2), ns') <- generalize ns e e', -- e п e'
       not (isVar eg)                      = if isRenaming th2 -- eg == e' с точностью до переименования
@@ -390,22 +407,6 @@ isNum :: Expr -> Bool
 isNum (C "Z" xs)   = True
 isNum (C "Suc" xs) = isNum $ head xs
 isNum _            = False
-
-instance Show Expr where
-    show (V name)          = name
-    show c@(C name args) | isNum c = show $ e2i c
-    show (C name args)     = name ++ "[" ++ (intercalate ", " (show <$> args)) ++ "]"
-    show (L arg expr)      = "λ" ++ arg ++ "." ++ (show expr)
-    show (l :@: r)         = "(" ++ (show l) ++ " " ++ (show r) ++ ")"  
-    show (F name)          = name
-    show (Let var e1 e2)   = "let " ++ var ++ " = " ++ (show e1) ++ " in " ++ (show e2)
-    show (Case expr cases) = "case " ++ (show expr) ++ " of\n\t{\n" ++ (concatMap (\pm -> "\t\t" ++ (show pm) ++ "\n") cases) ++ "\t}"
-
-instance Show Pattern where
-    show (P name args) = name ++ "[" ++ (intercalate " " args) ++ "]"
-
-instance Show PatternMatch where
-    show (p :- e) = show p ++ " :- " ++ show e
 
 getNode :: Graph -> String
 getNode (Node e _) = "\"" ++ (show e) ++ "\""
@@ -534,13 +535,49 @@ fupto = L "n" $ L "m" $ Case (F ">" :@: V "n" :@: V "m") [
         P "Fls" [] :- C "Cons" [V "n", F "upto" :@: (F "+" :@: (i2e 1) :@: V "n") :@: V "m"]
     ]
 
-libFun = ["+", "*", "^2", ">"]
+fcompare = L "a" $ L "b" $ Case (V "a") [
+        P "0" [] :- Case (V "b") [
+                P "0" [] :- C "Tru" [],
+                P "1" [] :- C "Fls" []
+            ],
+        P "1" [] :- Case (V "b") [
+                P "0" [] :- C "Fls" [],
+                P "1" [] :- C "Tru" []
+            ]
+    ]
 
-functions = [("+", fplus), ("*", fmult), ("^2", fsquare), (">", fgreater), ("sum", fsum), ("squares", fsquares), ("upto", fupto)]
+fmatch = L "p" $ L "s" $ F "loop" :@: V "p" :@: V "s" :@: V "p" :@: V "s"
+
+floop = L "pp" $ L "ss" $ L "op" $ L "os" $ Case (V "pp") [
+        P "Nil" []           :- C "Tru" [],
+        P "Cons" ["p", "pz"] :- Case (V "ss") [
+                P "Nil"  []          :- C "Fls" [],
+                P "Cons" ["s", "sz"] :- Case (F "==" :@: V "p" :@: V "s") [
+                        P "Tru" [] :- F "loop" :@: V "pz" :@: V "sz" :@: V "op" :@: V "os",
+                        P "Fls" [] :- F "next" :@: V "op" :@: V "os"
+                    ]
+            ]
+    ]
+
+fnext = L "op" $ L "ss" $ Case (V "ss") [
+        P "Nil" []           :- C "Fls" [],
+        P "Cons" ["s", "sz"] :- F "loop" :@: V "op" :@: V "sz" :@: V "op" :@: V "sz" 
+    ]
+
+
+libFun = ["+", "*", "^2", ">", "=="]
+
+functions = [("+", fplus), ("*", fmult), ("^2", fsquare), (">", fgreater), ("==", fcompare),
+             ("sum", fsum), ("squares", fsquares), ("upto", fupto),
+             ("match", fmatch), ("loop", floop), ("next", fnext)]
 
 list2e :: [Int] -> Expr
 list2e []     = C "Nil" []
 list2e (x:xs) = C "Cons" [i2e x, list2e xs]
+
+str2e :: String -> Expr
+str2e ""     = C "Nil" []
+str2e (x:xs) = C "Cons" [C (x:"") [], str2e xs]
 
 example n = F "sum" :@: (F "squares" :@: (F "upto" :@: i2e 1 :@: i2e n)) :@: i2e 0
 
@@ -553,3 +590,14 @@ check = supercompile functions example2
 super n = let (e, c) = generateCode check in eval (functions ++ c) (e :@: i2e n)
 
 toFile = writeFile "file.txt" $ renderDot check
+
+
+------------------------------------------------------------------------------
+
+match s = eval functions $ F "match" :@: str2e "010" :@: str2e s
+
+superMatch = supercompile functions $ F "match" :@: str2e "010" :@: V "str"
+
+writeMatch = writeFile "match.txt" $ renderDot superMatch
+
+smatch str = let (e, c) = generateCode superMatch in eval (functions ++ c) (e :@: str2e str)
